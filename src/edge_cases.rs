@@ -175,6 +175,42 @@ impl EdgeCaseExplorer {
                     tags: vec!["numeric".into()],
                 });
             }
+            if lower.contains("/") || lower.contains("div") || lower.contains("% ") || lower.contains("mod ") {
+                let guarded = lower.contains("checked_div")
+                    || lower.contains("checked_rem")
+                    || lower.contains("checked_div_euclid")
+                    || lower.contains(".checked_div(")
+                    || lower.contains("nonzero")
+                    || lower.contains("!= 0")
+                    || lower.contains("> 0")
+                    || lower.contains("< 0")
+                    || lower.contains("is_zero")
+                    || lower.contains("guard")
+                    || lower.contains("if b == 0")
+                    || lower.contains("if b != 0")
+                    || lower.contains("if x == 0")
+                    || lower.contains("denominator");
+                cases.push(EdgeCase {
+                    id: format!("ec-div-zero-{}", uuid::Uuid::new_v4()),
+                    description: "Division by zero".into(),
+                    example: "a / b where b == 0".into(),
+                    handled: guarded,
+                    recommendation: "Use checked_div or guard the divisor against zero.".into(),
+                    confidence: 0.95,
+                    severity: nexus_cog_core::common::Severity::Critical,
+                    tags: vec!["numeric".into(), "division".into()],
+                });
+                cases.push(EdgeCase {
+                    id: format!("ec-div-overflow-{}", uuid::Uuid::new_v4()),
+                    description: "Division overflow (i32::MIN / -1)".into(),
+                    example: "i32::MIN / -1".into(),
+                    handled: lower.contains("checked_div") || lower.contains(".checked_div("),
+                    recommendation: "Use checked_div to avoid panic on signed overflow.".into(),
+                    confidence: 0.7,
+                    severity: nexus_cog_core::common::Severity::Warning,
+                    tags: vec!["numeric".into(), "division".into()],
+                });
+            }
         }
 
         cases
@@ -224,5 +260,29 @@ mod tests {
         let e = EdgeCaseExplorer::new();
         let r = e.explore("f", "fn f(s: &str) -> Result<i32, E> { if s.is_empty() { return Err(E::Empty) }; s.parse() }");
         assert!(r.coverage > 0.0);
+    }
+
+    #[test]
+    fn divide_by_zero_surfaced() {
+        let e = EdgeCaseExplorer::new();
+        let r = e.explore("divide", "fn divide(a: i32, b: i32) -> i32 { a / b }");
+        assert!(r.cases.iter().any(|c| c.description.contains("Division by zero")));
+        assert!(!r.cases.iter().any(|c| c.description.contains("Division by zero") && c.handled));
+    }
+
+    #[test]
+    fn divide_with_guard_marked_handled() {
+        let e = EdgeCaseExplorer::new();
+        let r = e.explore("divide", "fn divide(a: i32, b: i32) -> i32 { if b == 0 { return 0; } a / b }");
+        let div_case = r.cases.iter().find(|c| c.description.contains("Division by zero")).unwrap();
+        assert!(div_case.handled, "guard should mark division as handled");
+    }
+
+    #[test]
+    fn checked_div_marked_handled() {
+        let e = EdgeCaseExplorer::new();
+        let r = e.explore("divide", "fn divide(a: i32, b: i32) -> Option<i32> { a.checked_div(b) }");
+        let div_case = r.cases.iter().find(|c| c.description.contains("Division by zero")).unwrap();
+        assert!(div_case.handled);
     }
 }
